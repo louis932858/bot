@@ -4,7 +4,13 @@ import os
 import config
 import time
 import threading
-import dashboard
+import threading
+
+def start_dashboard():
+    import dashboard
+    dashboard.run()
+
+threading.Thread(target=start_dashboard, daemon=True).start()
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
