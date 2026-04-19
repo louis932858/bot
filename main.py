@@ -2,68 +2,26 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import datetime
-import sqlite3
 import os
 
 # =========================
-# BOT SETUP
+# INTENTS
 # =========================
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =========================
-# DATABASE (SQLite)
+# SPEICHER (RAM)
 # =========================
-conn = sqlite3.connect("bot.db")
-c = conn.cursor()
-
-# Dienstzeiten
-c.execute("""
-CREATE TABLE IF NOT EXISTS dienst (
-    user_id INTEGER,
-    sekunden REAL
-)
-""")
-
-# Aktive Dienste
-c.execute("""
-CREATE TABLE IF NOT EXISTS active (
-    user_id INTEGER,
-    start_time TEXT
-)
-""")
-
-# Wochenplan
-c.execute("""
-CREATE TABLE IF NOT EXISTS plan (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tag TEXT,
-    user_id INTEGER,
-    zeit TEXT
-)
-""")
-
-conn.commit()
+dienstzeiten = {}
+aktive_dienste = {}
+dienstplan = []
 
 # =========================
-# HELPER
-# =========================
-def add_time(user_id, sekunden):
-    c.execute("SELECT sekunden FROM dienst WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-
-    if row:
-        new_time = row[0] + sekunden
-        c.execute("UPDATE dienst SET sekunden=? WHERE user_id=?", (new_time, user_id))
-    else:
-        c.execute("INSERT INTO dienst VALUES (?,?)", (user_id, sekunden))
-
-    conn.commit()
-
-# =========================
-# BOT READY
+# BOT START
 # =========================
 @bot.event
 async def on_ready():
@@ -73,79 +31,72 @@ async def on_ready():
 # =========================
 # 🟢 DIENST AN
 # =========================
-@bot.tree.command(name="dienston")
+@bot.tree.command(name="dienston", description="Gehe in den Dienst")
 async def dienston(interaction: discord.Interaction):
     user = interaction.user
 
-    c.execute("SELECT * FROM active WHERE user_id=?", (user.id,))
-    if c.fetchone():
-        await interaction.response.send_message("❌ Schon im Dienst!", ephemeral=True)
+    if user.id in aktive_dienste:
+        await interaction.response.send_message("❌ Du bist schon im Dienst!", ephemeral=True)
         return
 
-    c.execute("INSERT INTO active VALUES (?,?)", (user.id, datetime.datetime.now().isoformat()))
-    conn.commit()
+    aktive_dienste[user.id] = datetime.datetime.now()
 
     try:
         await user.edit(nick=f"🟢 | {user.name}")
     except:
         pass
 
-    await interaction.response.send_message("🟢 Dienst gestartet!")
+    await interaction.response.send_message("🟢 Du bist jetzt im Dienst!")
 
 # =========================
 # 🔴 DIENST AUS
 # =========================
-@bot.tree.command(name="dienstoff")
+@bot.tree.command(name="dienstoff", description="Gehe aus dem Dienst")
 async def dienstoff(interaction: discord.Interaction):
     user = interaction.user
 
-    c.execute("SELECT start_time FROM active WHERE user_id=?", (user.id,))
-    row = c.fetchone()
-
-    if not row:
-        await interaction.response.send_message("❌ Nicht im Dienst!", ephemeral=True)
+    if user.id not in aktive_dienste:
+        await interaction.response.send_message("❌ Du bist nicht im Dienst!", ephemeral=True)
         return
 
-    start = datetime.datetime.fromisoformat(row[0])
+    start = aktive_dienste.pop(user.id)
     dauer = (datetime.datetime.now() - start).total_seconds()
 
-    add_time(user.id, dauer)
-
-    c.execute("DELETE FROM active WHERE user_id=?", (user.id,))
-    conn.commit()
+    dienstzeiten[user.id] = dienstzeiten.get(user.id, 0) + dauer
 
     try:
         await user.edit(nick=f"🔴 | {user.name}")
     except:
         pass
 
-    await interaction.response.send_message(f"🔴 Dienst beendet! {int(dauer//60)} Minuten")
+    await interaction.response.send_message(
+        f"🔴 Dienst beendet! Zeit: {int(dauer // 60)} Minuten"
+    )
 
 # =========================
 # 🏆 LEADERBOARD
 # =========================
-@bot.tree.command(name="leaderboard")
+@bot.tree.command(name="leaderboard", description="Zeigt die aktivsten Mitglieder")
 async def leaderboard(interaction: discord.Interaction):
 
-    c.execute("SELECT user_id, sekunden FROM dienst ORDER BY sekunden DESC LIMIT 10")
-    rows = c.fetchall()
-
-    if not rows:
-        await interaction.response.send_message("📭 Keine Daten")
+    if not dienstzeiten:
+        await interaction.response.send_message("📭 Keine Daten vorhanden.")
         return
+
+    sorted_users = sorted(dienstzeiten.items(), key=lambda x: x[1], reverse=True)
 
     text = "🏆 **Leaderboard**\n\n"
 
-    for i, (uid, sec) in enumerate(rows, start=1):
+    for i, (uid, sec) in enumerate(sorted_users[:10], start=1):
         user = await bot.fetch_user(uid)
-        text += f"{i}. {user.name} - {round(sec/3600,2)}h\n"
+        text += f"{i}. {user.name} - {round(sec/3600, 2)}h\n"
 
     await interaction.response.send_message(text)
 
 # =========================
-# 📅 SCHICHT ERSTELLEN (WOCHENTAG)
+# 📅 SCHICHT ERSTELLEN
 # =========================
-@bot.tree.command(name="schicht")
+@bot.tree.command(name="schicht", description="Erstelle eine Schicht")
 @app_commands.describe(
     tag="Montag-Sonntag",
     user="User",
@@ -155,37 +106,44 @@ async def schicht(interaction: discord.Interaction, tag: str, user: discord.Memb
 
     tag = tag.capitalize()
 
-    c.execute("INSERT INTO plan (tag,user_id,zeit) VALUES (?,?,?)",
-              (tag, user.id, zeit))
-    conn.commit()
+    gueltig = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
 
-    await interaction.response.send_message(f"📅 {tag} gespeichert für {user.name} ({zeit})")
+    if tag not in gueltig:
+        await interaction.response.send_message("❌ Ungültiger Wochentag!", ephemeral=True)
+        return
+
+    dienstplan.append({
+        "tag": tag,
+        "user": user.id,
+        "zeit": zeit
+    })
+
+    await interaction.response.send_message(
+        f"📅 Schicht erstellt:\n👤 {user.mention}\n📆 {tag}\n⏰ {zeit}"
+    )
 
 # =========================
-# 📋 WOCHENPLAN
+# 📋 DIENSTPLAN ANZEIGEN
 # =========================
-@bot.tree.command(name="wochenplan")
-async def wochenplan(interaction: discord.Interaction):
+@bot.tree.command(name="dienstplan", description="Zeigt den Wochenplan")
+async def dienstplan_show(interaction: discord.Interaction):
 
-    c.execute("SELECT tag,user_id,zeit FROM plan")
-    rows = c.fetchall()
-
-    if not rows:
-        await interaction.response.send_message("📭 Kein Plan")
+    if not dienstplan:
+        await interaction.response.send_message("📭 Kein Dienstplan vorhanden.")
         return
 
     text = "📅 **Wochenplan**\n\n"
 
-    days = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
+    tage = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
 
-    for day in days:
-        text += f"📆 **{day}**\n"
+    for tag in tage:
+        text += f"📆 **{tag}**\n"
 
         found = False
-        for tag, uid, zeit in rows:
-            if tag == day:
-                user = await bot.fetch_user(uid)
-                text += f"👤 {user.name} | ⏰ {zeit}\n"
+        for s in dienstplan:
+            if s["tag"] == tag:
+                user = await bot.fetch_user(s["user"])
+                text += f"👤 {user.name} | ⏰ {s['zeit']}\n"
                 found = True
 
         if not found:
@@ -196,16 +154,14 @@ async def wochenplan(interaction: discord.Interaction):
     await interaction.response.send_message(text)
 
 # =========================
-# ❌ PLAN RESET
+# 🗑️ PLAN LÖSCHEN
 # =========================
-@bot.tree.command(name="resetplan")
+@bot.tree.command(name="resetplan", description="Löscht den Dienstplan")
 async def resetplan(interaction: discord.Interaction):
-    c.execute("DELETE FROM plan")
-    conn.commit()
-
-    await interaction.response.send_message("🗑️ Wochenplan gelöscht!")
+    dienstplan.clear()
+    await interaction.response.send_message("🗑️ Dienstplan gelöscht!")
 
 # =========================
-# START BOT (RAILWAY)
+# BOT START (RAILWAY)
 # =========================
 bot.run(os.getenv("TOKEN"))
