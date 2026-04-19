@@ -1,20 +1,14 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import os
 import sqlite3
 import time
+import os
 from dotenv import load_dotenv
 
-# ======================
-# 🔑 TOKEN
-# ======================
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 
-# ======================
-# INTENTS
-# ======================
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -38,11 +32,11 @@ CREATE TABLE IF NOT EXISTS shifts (
 conn.commit()
 
 # ======================
-# ⚙️ CONFIG
+# CONFIG
 # ======================
 ON_ROLE = "OnDuty"
 OFF_ROLE = "OffDuty"
-AFK_TIME = 300  # 5 Minuten
+AFK_TIME = 300
 
 # ======================
 # HELPERS
@@ -51,18 +45,18 @@ def get_role(guild, name):
     return discord.utils.get(guild.roles, name=name)
 
 
-def start_shift(user_id):
+def start_shift(uid):
     now = time.time()
     c.execute("""
     INSERT INTO shifts (user_id, start_time, last_action, total_time)
     VALUES (?, ?, ?, 0)
     ON CONFLICT(user_id) DO UPDATE SET start_time=?, last_action=?
-    """, (user_id, now, now, now, now))
+    """, (uid, now, now, now, now))
     conn.commit()
 
 
-def end_shift(user_id):
-    c.execute("SELECT start_time, total_time FROM shifts WHERE user_id=?", (user_id,))
+def end_shift(uid):
+    c.execute("SELECT start_time, total_time FROM shifts WHERE user_id=?", (uid,))
     row = c.fetchone()
 
     if row and row[0]:
@@ -70,21 +64,18 @@ def end_shift(user_id):
         total = row[1] or 0
 
         c.execute("""
-        UPDATE shifts
-        SET total_time=?, start_time=NULL
-        WHERE user_id=?
-        """, (total + duration, user_id))
-
+        UPDATE shifts SET total_time=?, start_time=NULL WHERE user_id=?
+        """, (total + duration, uid))
         conn.commit()
 
 
-def update_activity(user_id):
-    c.execute("UPDATE shifts SET last_action=? WHERE user_id=?", (time.time(), user_id))
+def update_activity(uid):
+    c.execute("UPDATE shifts SET last_action=? WHERE user_id=?", (time.time(), uid))
     conn.commit()
 
 
-def is_afk(user_id):
-    c.execute("SELECT last_action FROM shifts WHERE user_id=?", (user_id,))
+def is_afk(uid):
+    c.execute("SELECT last_action FROM shifts WHERE user_id=?", (uid,))
     row = c.fetchone()
 
     if not row or not row[0]:
@@ -106,7 +97,7 @@ async def on_message(message):
 
 
 # ======================
-# 🎛️ BUTTON PANEL
+# BUTTONS
 # ======================
 class ShiftView(discord.ui.View):
     def __init__(self):
@@ -132,7 +123,7 @@ class ShiftView(discord.ui.View):
         except:
             pass
 
-        await interaction.response.send_message("🟢 Du bist ON DUTY", ephemeral=True)
+        await interaction.response.send_message("🟢 ON DUTY", ephemeral=True)
 
     @discord.ui.button(label="Off Duty", style=discord.ButtonStyle.danger, emoji="🔴")
     async def off(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -155,23 +146,23 @@ class ShiftView(discord.ui.View):
         except:
             pass
 
-        await interaction.response.send_message("🔴 Du bist OFF DUTY", ephemeral=True)
+        await interaction.response.send_message("🔴 OFF DUTY", ephemeral=True)
 
 
 # ======================
-# 📱 SLASH COMMANDS
+# SLASH COMMANDS
 # ======================
-@bot.tree.command(name="onduty", description="Dienst starten")
+@bot.tree.command(name="onduty")
 async def onduty(interaction: discord.Interaction):
     await ShiftView().on(interaction, None)
 
 
-@bot.tree.command(name="offduty", description="Dienst beenden")
+@bot.tree.command(name="offduty")
 async def offduty(interaction: discord.Interaction):
     await ShiftView().off(interaction, None)
 
 
-@bot.tree.command(name="leaderboard", description="Top Arbeitszeit")
+@bot.tree.command(name="leaderboard")
 async def leaderboard(interaction: discord.Interaction):
 
     c.execute("SELECT user_id, total_time FROM shifts ORDER BY total_time DESC LIMIT 10")
@@ -190,7 +181,7 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="afkcheck", description="AFK Check (Admin)")
+@bot.tree.command(name="afkcheck")
 @app_commands.checks.has_permissions(administrator=True)
 async def afkcheck(interaction: discord.Interaction, member: discord.Member):
 
@@ -203,33 +194,13 @@ async def afkcheck(interaction: discord.Interaction, member: discord.Member):
 
 
 # ======================
-# START PANEL COMMAND
-# ======================
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def panel(ctx):
-    embed = discord.Embed(
-        title="🛡️ Shift System",
-        description="Benutze Buttons oder Slash Commands",
-        color=0x2b2d31
-    )
-
-    await ctx.send(embed=embed, view=ShiftView())
-
-
-# ======================
-# READY
+# START
 # ======================
 @bot.event
 async def on_ready():
-    print(f"Bot online als {bot.user}")
-    try:
-        await bot.tree.sync()
-        print("Slash Commands synced")
-    except Exception as e:
-        print(e)
-
-    bot.add_view(ShiftView())
+    print(f"Bot online {bot.user}")
+    await bot.tree.sync()
+    print("Slash Commands synced")
 
 
 bot.run(TOKEN)
