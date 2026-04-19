@@ -11,10 +11,13 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
+
+# 🔥 DEINE SERVER ID
+GUILD_ID = 1470487831398056022
 
 # =========================
-# SPEICHER (RAM)
+# SPEICHER
 # =========================
 dienstzeiten = {}
 aktive_dienste = {}
@@ -25,8 +28,13 @@ dienstplan = []
 # =========================
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
-    print(f"✅ Online als {bot.user}")
+    guild = discord.Object(id=GUILD_ID)
+
+    # 🔥 SOFORT SYNC (keine Wartezeit mehr)
+    await bot.tree.sync(guild=guild)
+
+    print(f"✅ Bot online: {bot.user}")
+    print("📡 Slash Commands synced (GUILD MODE)")
 
 # =========================
 # 🟢 DIENST AN
@@ -106,9 +114,9 @@ async def schicht(interaction: discord.Interaction, tag: str, user: discord.Memb
 
     tag = tag.capitalize()
 
-    gueltig = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
+    wochen = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]
 
-    if tag not in gueltig:
+    if tag not in wochen:
         await interaction.response.send_message("❌ Ungültiger Wochentag!", ephemeral=True)
         return
 
@@ -119,7 +127,7 @@ async def schicht(interaction: discord.Interaction, tag: str, user: discord.Memb
     })
 
     await interaction.response.send_message(
-        f"📅 Schicht erstellt:\n👤 {user.mention}\n📆 {tag}\n⏰ {zeit}"
+        f"📅 Schicht erstellt:\n📆 {tag}\n👤 {user.mention}\n⏰ {zeit}"
     )
 
 # =========================
@@ -140,6 +148,7 @@ async def dienstplan_show(interaction: discord.Interaction):
         text += f"📆 **{tag}**\n"
 
         found = False
+
         for s in dienstplan:
             if s["tag"] == tag:
                 user = await bot.fetch_user(s["user"])
@@ -162,6 +171,6 @@ async def resetplan(interaction: discord.Interaction):
     await interaction.response.send_message("🗑️ Dienstplan gelöscht!")
 
 # =========================
-# BOT START (RAILWAY)
+# 🔑 BOT START (RAILWAY)
 # =========================
 bot.run(os.getenv("TOKEN"))
