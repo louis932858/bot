@@ -5,9 +5,15 @@ import time
 import os
 from dotenv import load_dotenv
 
+# ======================
+# TOKEN
+# ======================
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 
+# ======================
+# INTENTS
+# ======================
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -35,7 +41,6 @@ conn.commit()
 ON_ROLE = "OnDuty"
 OFF_ROLE = "OffDuty"
 
-
 # ======================
 # HELPERS
 # ======================
@@ -43,20 +48,20 @@ def get_role(guild, name):
     return discord.utils.get(guild.roles, name=name)
 
 
-def start_shift(uid):
+def start_shift(user_id):
     now = time.time()
 
     c.execute("""
     INSERT INTO shifts (user_id, start_time, total_time)
     VALUES (?, ?, 0)
     ON CONFLICT(user_id) DO UPDATE SET start_time=?
-    """, (uid, now, now))
+    """, (user_id, now, now))
 
     conn.commit()
 
 
-def end_shift(uid):
-    c.execute("SELECT start_time, total_time FROM shifts WHERE user_id=?", (uid,))
+def end_shift(user_id):
+    c.execute("SELECT start_time, total_time FROM shifts WHERE user_id=?", (user_id,))
     row = c.fetchone()
 
     if row and row[0]:
@@ -67,15 +72,21 @@ def end_shift(uid):
         UPDATE shifts
         SET total_time=?, start_time=NULL
         WHERE user_id=?
-        """, (total + duration, uid))
+        """, (total + duration, user_id))
 
         conn.commit()
+
+
+def get_time(user_id):
+    c.execute("SELECT total_time FROM shifts WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    return round((row[0] if row else 0) / 3600, 2)
 
 
 # ======================
 # COMMAND: DIENSTON
 # ======================
-@bot.command(name="dienston")
+@bot.command()
 async def dienston(ctx):
 
     member = ctx.author
@@ -100,7 +111,7 @@ async def dienston(ctx):
 # ======================
 # COMMAND: DIENSTOFF
 # ======================
-@bot.command(name="dienstoff")
+@bot.command()
 async def dienstoff(ctx):
 
     member = ctx.author
@@ -121,7 +132,31 @@ async def dienstoff(ctx):
     except:
         pass
 
-    await ctx.send(f"🔴 {member.mention} ist jetzt AUS DEM DIENST")
+    hours = get_time(member.id)
+
+    await ctx.send(f"🔴 {member.mention} ist OFF DUTY | ⏱️ {hours} Stunden gesamt")
+
+
+# ======================
+# LEADERBOARD
+# ======================
+@bot.command()
+async def leaderboard(ctx):
+
+    c.execute("SELECT user_id, total_time FROM shifts ORDER BY total_time DESC LIMIT 10")
+    rows = c.fetchall()
+
+    embed = discord.Embed(title="📊 Dienst Leaderboard", color=0x00ff00)
+
+    for i, (uid, t) in enumerate(rows, start=1):
+        user = await bot.fetch_user(uid)
+        embed.add_field(
+            name=f"{i}. {user}",
+            value=f"⏱️ {round(t/3600,2)} Stunden",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
 
 
 # ======================
