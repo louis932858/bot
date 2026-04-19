@@ -1,179 +1,111 @@
 import discord
 from discord.ext import commands
-import sqlite3
-import time
+from discord import app_commands
+import datetime
 import os
-from dotenv import load_dotenv
 
-# ======================
-# TOKEN
-# ======================
-load_dotenv()
-TOKEN = os.getenv("TOKEN")
-
-# ======================
-# INTENTS
-# ======================
+# 🔧 Intents
 intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+# 📦 Speicher (RAM)
+dienstzeiten = {}      # UserID -> Sekunden
+aktive_dienste = {}    # UserID -> Startzeit
+dienstplan = []        # Liste von Schichten
 
-# ======================
-# DATABASE
-# ======================
-conn = sqlite3.connect("shift.db")
-c = conn.cursor()
-
-c.execute("""
-CREATE TABLE IF NOT EXISTS shifts (
-    user_id INTEGER PRIMARY KEY,
-    start_time REAL,
-    total_time REAL DEFAULT 0,
-    original_name TEXT
-)
-""")
-conn.commit()
-
-# ======================
-# CONFIG
-# ======================
-ON_ROLE = "OnDuty"
-OFF_ROLE = "OffDuty"
-
-# ======================
-# HELPERS
-# ======================
-def get_role(guild, name):
-    return discord.utils.get(guild.roles, name=name)
-
-
-def start_shift(user_id, name):
-    now = time.time()
-
-    c.execute("""
-    INSERT INTO shifts (user_id, start_time, total_time, original_name)
-    VALUES (?, ?, 0, ?)
-    ON CONFLICT(user_id) DO UPDATE SET start_time=?, original_name=?
-    """, (user_id, now, name, now, name))
-
-    conn.commit()
-
-
-def end_shift(user_id):
-    c.execute("SELECT start_time, total_time FROM shifts WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-
-    if row and row[0]:
-        duration = time.time() - row[0]
-        total = row[1] or 0
-
-        c.execute("""
-        UPDATE shifts
-        SET total_time=?, start_time=NULL
-        WHERE user_id=?
-        """, (total + duration, user_id))
-
-        conn.commit()
-
-
-def get_original_name(user_id):
-    c.execute("SELECT original_name FROM shifts WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    return row[0] if row else None
-
-
-def get_hours(user_id):
-    c.execute("SELECT total_time FROM shifts WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    return round((row[0] if row else 0) / 3600, 2)
-
-
-# ======================
-# DIENSTON
-# ======================
-@bot.command()
-async def dienston(ctx):
-
-    member = ctx.author
-    guild = ctx.guild
-
-    on_role = get_role(guild, ON_ROLE) or await guild.create_role(name=ON_ROLE)
-    off_role = get_role(guild, OFF_ROLE) or await guild.create_role(name=OFF_ROLE)
-
-    await member.add_roles(on_role)
-    await member.remove_roles(off_role)
-
-    start_shift(member.id, member.name)
-
-    try:
-        await member.edit(nick=f"[🟢IM DIENST🟢] {member.name}")
-    except:
-        pass
-
-    await ctx.send(f"🟢 {member.mention} ist jetzt im DIENST")
-
-
-# ======================
-# DIENSTOFF
-# ======================
-@bot.command()
-async def dienstoff(ctx):
-
-    member = ctx.author
-    guild = ctx.guild
-
-    on_role = get_role(guild, ON_ROLE)
-    off_role = get_role(guild, OFF_ROLE) or await guild.create_role(name=OFF_ROLE)
-
-    if on_role:
-        await member.remove_roles(on_role)
-
-    await member.add_roles(off_role)
-
-    end_shift(member.id)
-
-    original = get_original_name(member.id)
-
-    try:
-          await member.edit(nick=f"[🔴AUS DIENST🔴] {member.name}")
-    except:
-        pass
-
-    hours = get_hours(member.id)
-
-    await ctx.send(f"🔴 {member.mention} ist OFF DUTY | ⏱️ {hours} Stunden")
-
-
-# ======================
-# LEADERBOARD
-# ======================
-@bot.command()
-async def leaderboard(ctx):
-
-    c.execute("SELECT user_id, total_time FROM shifts ORDER BY total_time DESC LIMIT 10")
-    rows = c.fetchall()
-
-    embed = discord.Embed(title="📊 Dienst Leaderboard", color=0x00ff00)
-
-    for i, (uid, t) in enumerate(rows, start=1):
-        user = await bot.fetch_user(uid)
-        embed.add_field(
-            name=f"{i}. {user}",
-            value=f"⏱️ {round(t/3600,2)} Stunden",
-            inline=False
-        )
-
-    await ctx.send(embed=embed)
-
-
-# ======================
-# READY
-# ======================
+# 🔄 Bot ready
 @bot.event
 async def on_ready():
-    print(f"Bot online als {bot.user}")
+    await bot.tree.sync()
+    print(f"✅ Eingeloggt als {bot.user}")
 
+# 🟢 DIENST AN
+@bot.tree.command(name="dienston", description="Gehe in den Dienst")
+async def dienston(interaction: discord.Interaction):
+    user_id = interaction.user.id
 
+    if user_id in aktive_dienste:
+        await interaction.response.send_message("❌ Du bist schon im Dienst!", ephemeral=True)
+        return
+
+    aktive_dienste[user_id] = datetime.datetime.now()
+    await interaction.response.send_message("🟢 Du bist jetzt im Dienst!")
+
+# 🔴 DIENST AUS
+@bot.tree.command(name="dienstoff", description="Gehe aus dem Dienst")
+async def dienstoff(interaction: discord.Interaction):
+    user_id = interaction.user.id
+
+    if user_id not in aktive_dienste:
+        await interaction.response.send_message("❌ Du bist nicht im Dienst!", ephemeral=True)
+        return
+
+    start = aktive_dienste.pop(user_id)
+    dauer = (datetime.datetime.now() - start).total_seconds()
+
+    dienstzeiten[user_id] = dienstzeiten.get(user_id, 0) + dauer
+
+    await interaction.response.send_message(
+        f"🔴 Dienst beendet! Zeit: {int(dauer // 60)} Minuten"
+    )
+
+# 🏆 LEADERBOARD
+@bot.tree.command(name="leaderboard", description="Zeigt die aktivsten Mitglieder")
+async def leaderboard(interaction: discord.Interaction):
+    if not dienstzeiten:
+        await interaction.response.send_message("📭 Keine Daten vorhanden.")
+        return
+
+    sorted_users = sorted(dienstzeiten.items(), key=lambda x: x[1], reverse=True)
+
+    text = "🏆 **Leaderboard**\n\n"
+    for i, (user_id, zeit) in enumerate(sorted_users[:10], start=1):
+        try:
+            user = await bot.fetch_user(user_id)
+            stunden = round(zeit / 3600, 2)
+            text += f"{i}. {user.name} - {stunden}h\n"
+        except:
+            continue
+
+    await interaction.response.send_message(text)
+
+# 📅 DIENSTPLAN ERSTELLEN
+@bot.tree.command(name="dienstplan_erstellen", description="Erstelle eine Schicht")
+@app_commands.describe(user="User", datum="Datum (z.B. 20.04.2026)", zeit="Zeit (z.B. 18:00-22:00)")
+async def dienstplan_erstellen(interaction: discord.Interaction, user: discord.Member, datum: str, zeit: str):
+
+    dienstplan.append({
+        "user": user.id,
+        "datum": datum,
+        "zeit": zeit
+    })
+
+    await interaction.response.send_message(
+        f"📅 Schicht erstellt:\n👤 {user.mention}\n📆 {datum}\n⏰ {zeit}"
+    )
+
+# 📋 DIENSTPLAN ANZEIGEN
+@bot.tree.command(name="dienstplan", description="Zeigt alle Schichten")
+async def dienstplan_show(interaction: discord.Interaction):
+
+    if not dienstplan:
+        await interaction.response.send_message("📭 Kein Dienstplan vorhanden.")
+        return
+
+    text = "📅 **Dienstplan**\n\n"
+
+    for s in dienstplan:
+        user = await bot.fetch_user(s["user"])
+        text += f"👤 {user.name} | 📆 {s['datum']} | ⏰ {s['zeit']}\n"
+
+    await interaction.response.send_message(text)
+
+# ❌ DIENSTPLAN LÖSCHEN
+@bot.tree.command(name="dienstplan_loeschen", description="Löscht alle Schichten")
+async def dienstplan_delete(interaction: discord.Interaction):
+    dienstplan.clear()
+    await interaction.response.send_message("🗑️ Dienstplan gelöscht!")
+
+# 🔑 BOT START (Railway kompatibel)
+TOKEN = os.getenv("TOKEN")
 bot.run(TOKEN)
