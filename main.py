@@ -5,109 +5,121 @@ import datetime
 import os
 
 intents = discord.Intents.default()
+intents.members = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 📦 Speicher (RAM)
-dienstzeiten = {}      # user_id -> sekunden
-aktive_dienste = {}    # user_id -> startzeit
-dienstplan = []        # tägliche Schichten (ohne Datum)
+dienstzeiten = {}
+aktive_dienste = {}
 
-# 🔄 BOT START
+# 📅 Wochenplan
+wochenplan = {
+    "Montag": [],
+    "Dienstag": [],
+    "Mittwoch": [],
+    "Donnerstag": [],
+    "Freitag": [],
+    "Samstag": [],
+    "Sonntag": []
+}
+
+# 🔄 START
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"✅ Bot online: {bot.user}")
+    print(f"✅ Online: {bot.user}")
 
 # 🟢 DIENST AN
-@bot.tree.command(name="dienston", description="Gehe in den Dienst")
+@bot.tree.command(name="dienston")
 async def dienston(interaction: discord.Interaction):
-    user_id = interaction.user.id
+    user = interaction.user
 
-    if user_id in aktive_dienste:
-        await interaction.response.send_message("❌ Du bist bereits im Dienst!", ephemeral=True)
+    if user.id in aktive_dienste:
+        await interaction.response.send_message("❌ Schon im Dienst!", ephemeral=True)
         return
 
-    aktive_dienste[user_id] = datetime.datetime.now()
-    await interaction.response.send_message("🟢 Du bist jetzt im Dienst!")
+    aktive_dienste[user.id] = datetime.datetime.now()
+
+    try:
+        await user.edit(nick=f"🟢 | {user.name}")
+    except:
+        pass
+
+    await interaction.response.send_message("🟢 Dienst gestartet!")
 
 # 🔴 DIENST AUS
-@bot.tree.command(name="dienstoff", description="Gehe aus dem Dienst")
+@bot.tree.command(name="dienstoff")
 async def dienstoff(interaction: discord.Interaction):
-    user_id = interaction.user.id
+    user = interaction.user
 
-    if user_id not in aktive_dienste:
-        await interaction.response.send_message("❌ Du bist nicht im Dienst!", ephemeral=True)
+    if user.id not in aktive_dienste:
+        await interaction.response.send_message("❌ Nicht im Dienst!", ephemeral=True)
         return
 
-    start = aktive_dienste.pop(user_id)
+    start = aktive_dienste.pop(user.id)
     dauer = (datetime.datetime.now() - start).total_seconds()
 
-    dienstzeiten[user_id] = dienstzeiten.get(user_id, 0) + dauer
+    dienstzeiten[user.id] = dienstzeiten.get(user.id, 0) + dauer
 
-    await interaction.response.send_message(
-        f"🔴 Dienst beendet! Zeit: {int(dauer // 60)} Minuten"
-    )
+    try:
+        await user.edit(nick=f"🔴 | {user.name}")
+    except:
+        pass
 
-# 🏆 LEADERBOARD
-@bot.tree.command(name="leaderboard", description="Zeigt die aktivsten Mitglieder")
-async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.send_message("🔴 Dienst beendet!")
 
-    if not dienstzeiten:
-        await interaction.response.send_message("📭 Keine Daten vorhanden.")
-        return
-
-    sorted_users = sorted(dienstzeiten.items(), key=lambda x: x[1], reverse=True)
-
-    text = "🏆 **Leaderboard**\n\n"
-
-    for i, (user_id, zeit) in enumerate(sorted_users[:10], start=1):
-        try:
-            user = await bot.fetch_user(user_id)
-            stunden = round(zeit / 3600, 2)
-            text += f"{i}. {user.name} - {stunden}h\n"
-        except:
-            continue
-
-    await interaction.response.send_message(text)
-
-# 📅 DIENSTPLAN (OHNE DATUM → TÄGLICH GÜLTIG)
-@bot.tree.command(name="dienstplan_erstellen", description="Erstelle eine tägliche Schicht")
+# 📅 SCHICHT ERSTELLEN (WOCHENTAG)
+@bot.tree.command(name="schicht")
 @app_commands.describe(
+    tag="Wochentag (Montag-Sonntag)",
     user="User",
     zeit="Zeit (z.B. 18:00-22:00)"
 )
-async def dienstplan_erstellen(interaction: discord.Interaction, user: discord.Member, zeit: str):
+async def schicht(interaction: discord.Interaction, tag: str, user: discord.Member, zeit: str):
 
-    dienstplan.append({
+    tag = tag.capitalize()
+
+    if tag not in wochenplan:
+        await interaction.response.send_message("❌ Ungültiger Wochentag!", ephemeral=True)
+        return
+
+    wochenplan[tag].append({
         "user": user.id,
         "zeit": zeit
     })
 
     await interaction.response.send_message(
-        f"📅 Tägliche Schicht erstellt:\n👤 {user.mention}\n⏰ {zeit}"
+        f"📅 Schicht erstellt:\n👤 {user.mention}\n📆 {tag}\n⏰ {zeit}"
     )
 
-# 📋 DIENSTPLAN ANZEIGEN
-@bot.tree.command(name="dienstplan", description="Zeigt den täglichen Dienstplan")
-async def dienstplan_show(interaction: discord.Interaction):
+# 📋 WOCHENPLAN ANZEIGEN
+@bot.tree.command(name="wochenplan")
+async def wochenplan_show(interaction: discord.Interaction):
 
-    if not dienstplan:
-        await interaction.response.send_message("📭 Kein Dienstplan vorhanden.")
-        return
+    text = "📅 **Wochenplan (Mo–So)**\n\n"
 
-    text = "📅 **Täglicher Dienstplan**\n\n"
+    for tag, schichten in wochenplan.items():
+        text += f"📆 **{tag}**\n"
 
-    for s in dienstplan:
-        user = await bot.fetch_user(s["user"])
-        text += f"👤 {user.name} | ⏰ {s['zeit']}\n"
+        if not schichten:
+            text += "  - Keine Schichten\n\n"
+            continue
+
+        for s in schichten:
+            user = await bot.fetch_user(s["user"])
+            text += f"  👤 {user.name} | ⏰ {s['zeit']}\n"
+
+        text += "\n"
 
     await interaction.response.send_message(text)
 
-# ❌ DIENSTPLAN LÖSCHEN
-@bot.tree.command(name="dienstplan_loeschen", description="Löscht alle Schichten")
-async def dienstplan_delete(interaction: discord.Interaction):
-    dienstplan.clear()
-    await interaction.response.send_message("🗑️ Dienstplan gelöscht!")
+# ❌ PLAN LÖSCHEN
+@bot.tree.command(name="wochenplan_reset")
+async def reset(interaction: discord.Interaction):
+    for k in wochenplan:
+        wochenplan[k] = []
 
-# 🔑 TOKEN (Railway)
+    await interaction.response.send_message("🗑️ Wochenplan zurückgesetzt!")
+
+# 🔑 START
 bot.run(os.getenv("TOKEN"))
