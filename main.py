@@ -30,7 +30,8 @@ c.execute("""
 CREATE TABLE IF NOT EXISTS shifts (
     user_id INTEGER PRIMARY KEY,
     start_time REAL,
-    total_time REAL DEFAULT 0
+    total_time REAL DEFAULT 0,
+    original_name TEXT
 )
 """)
 conn.commit()
@@ -48,14 +49,14 @@ def get_role(guild, name):
     return discord.utils.get(guild.roles, name=name)
 
 
-def start_shift(user_id):
+def start_shift(user_id, name):
     now = time.time()
 
     c.execute("""
-    INSERT INTO shifts (user_id, start_time, total_time)
-    VALUES (?, ?, 0)
-    ON CONFLICT(user_id) DO UPDATE SET start_time=?
-    """, (user_id, now, now))
+    INSERT INTO shifts (user_id, start_time, total_time, original_name)
+    VALUES (?, ?, 0, ?)
+    ON CONFLICT(user_id) DO UPDATE SET start_time=?, original_name=?
+    """, (user_id, now, name, now, name))
 
     conn.commit()
 
@@ -77,14 +78,20 @@ def end_shift(user_id):
         conn.commit()
 
 
-def get_time(user_id):
+def get_original_name(user_id):
+    c.execute("SELECT original_name FROM shifts WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    return row[0] if row else None
+
+
+def get_hours(user_id):
     c.execute("SELECT total_time FROM shifts WHERE user_id=?", (user_id,))
     row = c.fetchone()
     return round((row[0] if row else 0) / 3600, 2)
 
 
 # ======================
-# COMMAND: DIENSTON
+# DIENSTON
 # ======================
 @bot.command()
 async def dienston(ctx):
@@ -98,10 +105,10 @@ async def dienston(ctx):
     await member.add_roles(on_role)
     await member.remove_roles(off_role)
 
-    start_shift(member.id)
+    start_shift(member.id, member.name)
 
     try:
-        await member.edit(nick=f"[ON DUTY] {member.name}")
+        await member.edit(nick=f"[🟢IM DIENST🟢] {member.name}")
     except:
         pass
 
@@ -109,7 +116,7 @@ async def dienston(ctx):
 
 
 # ======================
-# COMMAND: DIENSTOFF
+# DIENSTOFF
 # ======================
 @bot.command()
 async def dienstoff(ctx):
@@ -127,14 +134,16 @@ async def dienstoff(ctx):
 
     end_shift(member.id)
 
+    original = get_original_name(member.id)
+
     try:
-        await member.edit(nick=member.name)
+          await member.edit(nick=f"[🔴AUS DIENST🔴] {member.name}")
     except:
         pass
 
-    hours = get_time(member.id)
+    hours = get_hours(member.id)
 
-    await ctx.send(f"🔴 {member.mention} ist OFF DUTY | ⏱️ {hours} Stunden gesamt")
+    await ctx.send(f"🔴 {member.mention} ist OFF DUTY | ⏱️ {hours} Stunden")
 
 
 # ======================
