@@ -1,1 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shift Dashboard</title>
+    <style>
+        body {
+            font-family: Arial;
+            background: #1e1e1e;
+            color: white;
+            text-align: center;
+        }
+        .card {
+            background: #2b2d31;
+            padding: 20px;
+            margin: 10px;
+            border-radius: 10px;
+        }
+        a { color: red; }
+    </style>
+</head>
+<body>
 
+<h1>🛡️ Shift Admin Panel</h1>
+
+{% for user in leaderboard %}
+<div class="card">
+    <h3>User ID: {{ user.user_id }}</h3>
+    <p>⏱️ {{ user.hours }} Stunden</p>
+    <a href="/reset/{{ user.user_id }}">Reset</a>
+</div>
+{% endfor %}
+
+</body>
+</html>
