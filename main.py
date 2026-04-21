@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import datetime
 import os
 
@@ -13,12 +12,13 @@ intents.members = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
 # =========================
-# SERVER ID
+# SERVER
 # =========================
 GUILD_ID = 1470487831398056022
+GUILD = discord.Object(id=GUILD_ID)
 
 # =========================
-# SPEICHER
+# STORAGE
 # =========================
 dienstzeiten = {}
 aktive_dienste = {}
@@ -32,31 +32,34 @@ def get_active_list(guild):
         return "❌ Niemand im Dienst"
 
     text = ""
-
     for uid in aktive_dienste:
         member = guild.get_member(uid)
         if member:
             text += f"🟢 {member.display_name}\n"
-
     return text
 
 
-async def start_dienst(user):
+async def set_nick(member, nick):
+    try:
+        await member.edit(nick=nick)
+    except discord.Forbidden:
+        print("❌ Keine Rechte für Nicknames")
+    except discord.HTTPException:
+        print("❌ Nickname Fehler")
+
+
+async def start_dienst(user: discord.Member):
     if user.id in aktive_dienste:
         return False
 
     aktive_dienste[user.id] = datetime.datetime.now()
     original_names[user.id] = user.display_name
 
-    try:
-        await user.edit(nick=f"[ON DUTY] {user.name}")
-    except:
-        pass
-
+    await set_nick(user, f"[ON DUTY] {user.name}")
     return True
 
 
-async def stop_dienst(user):
+async def stop_dienst(user: discord.Member):
     if user.id not in aktive_dienste:
         return None
 
@@ -66,11 +69,7 @@ async def stop_dienst(user):
     dienstzeiten[user.id] = dienstzeiten.get(user.id, 0) + dauer
 
     original = original_names.get(user.id)
-
-    try:
-        await user.edit(nick=original)
-    except:
-        pass
+    await set_nick(user, original or user.name)
 
     return dauer
 
@@ -82,7 +81,12 @@ class DienstPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Im Dienst", style=discord.ButtonStyle.success, emoji="🟢")
+    @discord.ui.button(
+        label="Im Dienst",
+        style=discord.ButtonStyle.success,
+        emoji="🟢",
+        custom_id="louis932"
+    )
     async def on(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         ok = await start_dienst(interaction.user)
@@ -100,10 +104,15 @@ class DienstPanel(discord.ui.View):
         )
 
         await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message("🟢 Dienst gestartet", ephemeral=True)
 
-        await interaction.response.send_message("🟢 Du bist im Dienst", ephemeral=True)
 
-    @discord.ui.button(label="Aus Dienst", style=discord.ButtonStyle.danger, emoji="🔴")
+    @discord.ui.button(
+        label="Aus Dienst",
+        style=discord.ButtonStyle.danger,
+        emoji="🔴",
+        custom_id="louis931"
+    )
     async def off(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         dauer = await stop_dienst(interaction.user)
@@ -129,9 +138,9 @@ class DienstPanel(discord.ui.View):
 
 
 # =========================
-# PANEL COMMAND (KEINE PERMISSIONS PROBLEME)
+# PANEL COMMAND
 # =========================
-@bot.tree.command(name="panel", description="Shift Panel senden")
+@bot.tree.command(name="panel", description="Shift Panel senden", guild=GUILD)
 async def panel(interaction: discord.Interaction):
 
     embed = discord.Embed(
@@ -153,7 +162,7 @@ async def panel(interaction: discord.Interaction):
 # =========================
 # LEADERBOARD
 # =========================
-@bot.tree.command(name="leaderboard", description="Zeigt die aktivsten User")
+@bot.tree.command(name="leaderboard", description="Top Dienstzeiten", guild=GUILD)
 async def leaderboard(interaction: discord.Interaction):
 
     if not dienstzeiten:
@@ -165,8 +174,11 @@ async def leaderboard(interaction: discord.Interaction):
     text = "🏆 **Leaderboard**\n\n"
 
     for i, (uid, sec) in enumerate(sorted_users[:10], start=1):
-        user = await bot.fetch_user(uid)
-        text += f"{i}. {user.name} - {round(sec/3600, 2)}h\n"
+        try:
+            user = await bot.fetch_user(uid)
+            text += f"{i}. {user.name} - {round(sec/3600, 2)}h\n"
+        except:
+            text += f"{i}. Unbekannt - {round(sec/3600, 2)}h\n"
 
     await interaction.response.send_message(text)
 
@@ -176,12 +188,8 @@ async def leaderboard(interaction: discord.Interaction):
 # =========================
 @bot.event
 async def on_ready():
-    guild = discord.Object(id=GUILD_ID)
-
-    await bot.tree.sync(guild=guild)
-
+    await bot.tree.sync(guild=GUILD)
     bot.add_view(DienstPanel())  # wichtig für Buttons nach Restart
-
     print(f"✅ Bot online: {bot.user}")
 
 
